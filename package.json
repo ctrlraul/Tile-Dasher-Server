@@ -1,0 +1,41 @@
+{
+	"name": "tile-dasher-server",
+	"version": "1.0.0",
+	"main": "build/main.js",
+	"type": "module",
+	"scripts": {
+		"schema": "kysely-codegen --camel-case --out-file src/database/schema.ts",
+		"build": "node scripts/build.js",
+		"start": "node --enable-source-maps build/main.js",
+		"dev": "node scripts/dev.js",
+		"check": "tsc --noemit"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"description": "",
+	"dependencies": {
+		"@types/ws": "^8.5.13",
+		"cookie-parser": "^1.4.7",
+		"dotenv": "^16.4.7",
+		"express": "^4.21.2",
+		"kysely": "^0.27.5",
+		"kysely-codegen": "^0.17.0",
+		"oauth4webapi": "^3.1.4",
+		"pg": "^8.13.1",
+		"tweetnacl": "^1.0.3",
+		"uuidv7": "^1.0.2",
+		"ws": "^8.18.0"
+	},
+	"devDependencies": {
+		"@types/express": "^5.0.0",
+		"@types/pg": "^8.11.10",
+		"chokidar": "^4.0.3",
+		"esbuild": "^0.24.2",
+		"esbuild-node-externals": "^1.16.0",
+		"nodemon": "^3.1.9",
+		"ts-node": "^10.9.2",
+		"ts-node-dev": "^2.0.0",
+		"typescript": "^5.7.2"
+	}
+}

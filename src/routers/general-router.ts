@@ -1,9 +1,9 @@
-import { Router, Status } from '@oak/oak';
-import { ticketParserMiddleware } from '../middlewares/ticket-parser.ts';
-import { authenticatedMiddleware } from '../middlewares/is-authenticated.ts';
-import { Track } from '../models/track.ts';
-import { Database } from '../database/database.ts';
-import { $array, $number, $object, $record, $string } from '@purity/purity';
+import { Router, Request, Response } from 'express';
+import { ticketParserMiddleware } from '../middlewares/ticket-parser.js';
+import { authenticatedMiddleware } from '../middlewares/is-authenticated.js';
+import { Track } from '../models/track.js';
+import { Database } from '../database/database.js';
+import { $array, $number, $object, $record, $string } from '../helpers/purity.js';
 
 
 const $trackCreateCheck = $object({
@@ -18,75 +18,85 @@ const $trackUpdateCheck = $object({
 });
 
 
-const router = new Router<ContextState>();
+const router = Router();
 
 router.use(ticketParserMiddleware);
 router.use(authenticatedMiddleware);
 
 
-router.post('/player/update', ctx =>
-{
-	ctx.response.status = 200;
-});
+router.post('/track', async (req: Request, res: Response) => {
+	
+	const upload = $trackCreateCheck.assert(req.body);
 
-router.post('/track/create', async ctx =>
-{
-	const upload = $trackCreateCheck.assert(await ctx.request.body.json());
 	const track = await Database.createTrack({
 		name: upload.name,
-		playerId: ctx.state.ticket!.playerId,
+		playerId: req.ticket!.playerId,
 		tileCoords: upload.tileCoords
 	});
 
-	ctx.response.body = JSON.stringify(track);
+	res.json(track);
 });
 
-router.post('/track/update', async ctx =>
+
+router.put('/track', async (req: Request, res: Response) =>
 {
-	const upload = $trackUpdateCheck.assert(await ctx.request.body.json());
+	const upload = $trackUpdateCheck.assert(req.body);
 	const track = await Database.updateTrack({
 		id: upload.id,
 		name: upload.name,
-		playerId: ctx.state.ticket!.playerId,
+		playerId: req.ticket!.playerId,
 		tileCoords: upload.tileCoords
 	});
 
-	ctx.response.body = JSON.stringify(track);
+	res.json(track);
 });
 
-router.get('/track', async ctx =>
+router.get('/track', async (req: Request, res: Response) =>
 {
-	const id = ctx.request.url.searchParams.get('id');
+	const id = String(req.query['id']);
 
 	if (id === null)
 	{
-		ctx.response.status = Status.BadRequest;
-		ctx.response.body = 'id is required';
+		res.status(401).send('id is required');
 		return;
 	}
 
 	const track: Track = await Database.getTrack(id);
 
-	ctx.response.body = JSON.stringify(track);
+	res.json(track);
 });
 
-router.get('/track/play', async ctx =>
+router.delete('/track', async (req: Request, res: Response) =>
 {
-	const id = ctx.request.url.searchParams.get('id');
+	const id = String(req.query['id']);
 
 	if (id === null)
 	{
-		ctx.response.status = Status.BadRequest;
-		ctx.response.body = 'id is required';
+		res.status(401).send('id is required');
+		return;
+	}
+
+	await Database.deleteTrack(req.ticket!.playerId, id);
+
+	res.send();
+});
+
+router.get('/track/play', async (req: Request, res: Response) =>
+{
+	const id = String(req.query['id']);
+
+	if (id === null)
+	{
+		res.status(401).send('id is required');
 		return;
 	}
 
 	const track: Track = await Database.getTrack(id);
 
 	Database.incrementTrackPlays(id)
-		.catch(error => console.log('Error incrementing track plays:', error));
+		.catch((error: unknown) => console.log('Error incrementing track plays:', error));
 
-	ctx.response.body = JSON.stringify(track);
+	res.json(track);
 });
 
 

@@ -1,12 +1,14 @@
-import { Router } from '@oak/oak';
-import { Database } from '../database/database.ts';
-import { TICKET_HEADER_NAME, ticketParserMiddleware } from '../middlewares/ticket-parser.ts';
-import { TokenHelper } from '../helpers/token-helper.ts';
-import { env } from '@raul/env';
-import { EventSender } from '../event-sender.ts';
-import type { Player } from '../models/player.ts';
+import { Database } from '../database/database.js';
+import { TicketName, ticketParserMiddleware } from '../middlewares/ticket-parser.js';
+import { TokenHelper } from '../helpers/token-helper.js';
+// import { EventSender } from '../event-sender.js';
+import type { Player } from '../models/player.js';
 import * as oauth from 'oauth4webapi'
 import { uuidv7 } from 'uuidv7';
+import { env } from '../helpers/env.js';
+import { Router, Request, Response } from 'express';
+import { getRequestIp, getRequestUrl } from '../helpers/request.js';
+import { readFileSync } from 'fs';
 
 
 interface AuthState {
@@ -35,36 +37,42 @@ const clientAuth = oauth.ClientSecretPost(env('GOOGLE_CLIENT_SECRET'));
 const code_challenge_method = 'S256';
 const AuthStateLifespan = 60 * 5 * 1000; // 5 minutes
 const issuer = new URL(env('GOOGLE_CLIENT_DISCOVERY_URL'));
-const authServer = await oauth
-	.discoveryRequest(issuer, { algorithm: 'oidc' })
-	.then(response => oauth.processDiscoveryResponse(issuer, response));
+let authServer: oauth.AuthorizationServer;
+
+// Ass
+(async () => {
+	authServer = await oauth
+		.discoveryRequest(issuer, { algorithm: 'oidc' })
+		.then(response => oauth.processDiscoveryResponse(issuer, response));
+})();
 
 const allowImpersonation = env('ALLOW_INSECURE_IMPERSONATION', '0') === '1';
 
-export const authRouter = new Router<ContextState>();
+export const authRouter = Router();
 
-authRouter.get('/auth/google', async ctx =>
+authRouter.get('/auth/google', async (req: Request, res: Response) =>
 {
 	const codeVerifier = oauth.generateRandomCodeVerifier();
 	const code_challenge = await oauth.calculatePKCECodeChallenge(codeVerifier);
-	const clientPort = ctx.request.url.searchParams.get('port');
+	const clientPort = String(req.query['port']);
 
 	if (clientPort == null)
 		throw new Error('Expected client to provide local server port');
 
 	const authState: AuthState = {
 		date: Date.now(),
-		ip: ctx.request.ip,
-		ua: ctx.request.userAgent.ua,
+		ip: getRequestIp(req),
+		ua: req.header('User-Agent') || '',
 		codeVerifier,
 		clientPort,
 	};
 	const state = TokenHelper.createSecretToken<AuthState>(authState);
 	
+	const requestUrl = getRequestUrl(req);
 	const url = new URL(authServer.authorization_endpoint!);
 	const params = new URLSearchParams({
 		client_id: client.client_id,
-		redirect_uri: ctx.request.url.origin + '/auth/google/callback',
+		redirect_uri: requestUrl.origin + '/auth/google/callback',
 		response_type: 'code',
 		scope: 'openid email profile',
 		code_challenge,
@@ -74,12 +82,12 @@ authRouter.get('/auth/google', async ctx =>
 
 	url.search = params.toString();
 
-	ctx.response.redirect(url.toString());
+	res.redirect(url.toString());
 });
 
-authRouter.get('/auth/google/callback', async ctx =>
+authRouter.get('/auth/google/callback', async (req: Request, res: Response) =>
 {
-	const state = ctx.request.url.searchParams.get('state');
+	const state = String(req.query['state']);
 
 	if (state == undefined)
 		throw new Error('Auth state missing');
@@ -89,14 +97,15 @@ authRouter.get('/auth/google/callback', async ctx =>
 	if (Date.now() - stateData.date > AuthStateLifespan)
 		throw new Error('Auth state expired');
 
-	if (stateData.ip !== ctx.request.ip)
+	if (stateData.ip !== getRequestIp(req))
 		throw new Error('IP mismatch');
 	
-	if (stateData.ua !== ctx.request.userAgent.ua)
+	if (stateData.ua !== (req.header('User-Agent') || ''))
 		throw new Error('User Agent mismatch');
 
-	const validateParams = oauth.validateAuthResponse(authServer, client, ctx.request.url, state);
-	const redirect_uri = ctx.request.url.origin + '/auth/google/callback';
+	const url = new URL(getRequestUrl(req));
+	const validateParams = oauth.validateAuthResponse(authServer, client, url, state);
+	const redirect_uri = url.origin + '/auth/google/callback';
 	const response = await oauth.authorizationCodeGrantRequest(
 		authServer,
 		client,
@@ -114,53 +123,48 @@ authRouter.get('/auth/google/callback', async ctx =>
 		playerId: playerId
 	});
 
-	ctx.response.redirect(`http://localhost:${stateData.clientPort}/?${TICKET_HEADER_NAME}=${ticket.id}`);
+	res.redirect(`http://localhost:${stateData.clientPort}/?${TicketName}=${ticket.id}`);
 
 	console.log('Google login:', playerId);
 });
 
-authRouter.get('/auth/success', async ctx =>
+authRouter.get('/auth/success', async (req: Request, res: Response) =>
 {
-	const text = await Deno.readTextFile('static/auth-success.html');
-    ctx.response.headers.set('Content-Type', 'text/html')
-    ctx.response.body = text;
+	const html = readFileSync('static/auth-success.html', 'utf-8');
+	res.setHeader('Content-Type', 'text/html');
+	res.send(html);
 });
 
-authRouter.get('/auth/clear', async ctx =>
+authRouter.get('/auth/clear', async (req: Request, res: Response) =>
 {
-	const ticketId = ctx.request.headers.get(TICKET_HEADER_NAME);
-
-	if (ticketId == null)
-		return;
-
+	const ticketId = String(req.headers[TicketName]);
 	const ticket = await Database.getTicket(ticketId);
 
-	EventSender.disconnect(ticket!.playerId);
+	// EventSender.disconnect(ticket!.playerId); TODO
 
 	await Database.deleteTicket(ticketId);
 });
 
-authRouter.get('/auth/state', ticketParserMiddleware, ctx =>
+authRouter.get('/auth/state', ticketParserMiddleware, (req: Request, res: Response) =>
 {
-	ctx.response.body = ctx.state.ticket == undefined ? '0' : '1';
+	res.send(req.ticket ? '1' : '0');
 });
 
-authRouter.post('/auth/impersonate', async ctx =>
+authRouter.post('/auth/impersonate', async (req: Request, res: Response) =>
 {
 	if (!allowImpersonation)
 	{
-		ctx.response.status = 401;
-		ctx.response.body = 'Nuh uh';
+		res.status(401).send('Nuh uh');
 		return;
 	}
 
-	const playerId = String(await ctx.request.body.json());
+	const playerId = String(req.body);
 	const ticket = await Database.getTicketForPlayerId(playerId) ?? await Database.createTicket({
 		id: TokenHelper.generateSessionToken(),
 		playerId: playerId,
 	});
 
-	ctx.response.body = JSON.stringify(ticket.id);
+	res.json(ticket.id);
 });
 
 
@@ -177,7 +181,7 @@ async function getGoogleAccountInfo(accessToken: string): Promise<GoogleAccountI
 	if (!response.ok)
 		throw new Error('Failed to fetch user info');
 
-	return await response.json();
+	return await response.json() as GoogleAccountInfo;
 }
 
 async function getOrCreatePlayerIdForGoogle(accountInfo: GoogleAccountInfo): Promise<Player['id']>

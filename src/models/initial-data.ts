@@ -1,5 +1,5 @@
-import type { Player } from './player.ts';
-import { Tile } from './tile.ts';
+import type { Player } from './player.js';
+import { Tile } from './tile.js';
 
 export interface InitialData
 {

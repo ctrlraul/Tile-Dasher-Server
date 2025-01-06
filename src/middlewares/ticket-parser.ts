@@ -1,19 +1,17 @@
-import type { Context, Next } from '@oak/oak';
-import { Database } from '../database/database.ts';
+import type { Request, Response, NextFunction } from 'express';
+import { Database } from '../database/database.js';
 
-type Ctx = Context<ContextState, ContextState>;
+export const TicketName: string = 'x-ticket';
 
-export const TICKET_HEADER_NAME: string = 'x-ticket';
-
-export async function ticketParserMiddleware(ctx: Ctx, next: Next)
+export async function ticketParserMiddleware(req: Request, _res: Response, next: NextFunction)
 {
-	const ticketId = ctx.request.headers.get(TICKET_HEADER_NAME);
+	const ticketId = req.headers[TicketName] as string;
 
 	if (ticketId != null)
 	{
 		try
 		{
-			ctx.state.ticket = await Database.getTicket(ticketId);
+			req.ticket = await Database.getTicket(ticketId);
 		}
 		catch (error)
 		{
@@ -21,5 +19,5 @@ export async function ticketParserMiddleware(ctx: Ctx, next: Next)
 		}
 	}
 	
-	await next();
+	next();
 }

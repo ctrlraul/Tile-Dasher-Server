@@ -1,4 +1,4 @@
-import { $array, $boolean, $number, $object, $record, $string, CheckerType } from '@purity/purity';
+import { $array, $boolean, $literal, $number, $object, $objectStrict, $string, CheckerType } from '../helpers/purity.js';
 
 export const $tile = $object({
 	id: $number,
@@ -7,7 +7,12 @@ export const $tile = $object({
 	atlasY: $number,
 	matter: $number,
 	safe: $boolean,
-	effects: $record($array($string)),
+	friction: $number,
+	listed: $boolean,
+	effects: $array($objectStrict({
+		trigger: $literal('Init', 'Any', 'Bump', 'Stand', 'PushLeft', 'PushRight'),
+		effect: $string,
+	})),
 });
 
 export type Tile = CheckerType<typeof $tile>;

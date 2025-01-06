@@ -1,15 +1,12 @@
-import type { Next, Context } from '@oak/oak';
+import type { Request, Response, NextFunction } from 'express';
 
-type Ctx = Context<ContextState, ContextState>;
-
-export async function authenticatedMiddleware(ctx: Ctx, next: Next)
+export async function authenticatedMiddleware(req: Request, res: Response, next: NextFunction)
 {
-	if (ctx.state.ticket === undefined)
+	if (!req.ticket)
 	{
-		ctx.response.status = 401;
-		ctx.response.body = 'Unauthorized';
+		res.status(401).send('Unauthorized');
 		return;
 	}
 
-	await next();
+	next();
 }

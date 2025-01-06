@@ -1,4 +1,4 @@
-import { TrackInfo } from './track-info.ts';
+import { TrackInfo } from './track-info.js';
 
 export interface Player {
     id: string;

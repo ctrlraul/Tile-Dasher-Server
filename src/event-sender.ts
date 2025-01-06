@@ -1,71 +1,62 @@
-import { Router, type ServerSentEventTarget } from '@oak/oak';
-import { createInitialData } from './create-initial-data.ts';
-import { Logger } from './helpers/logger.ts';
-import { Database } from './database/database.ts';
-import { ticketParserMiddleware } from './middlewares/ticket-parser.ts';
-import { authenticatedMiddleware } from './middlewares/is-authenticated.ts';
-import type { Player } from './models/player.ts';
-import type { InitialData } from './models/initial-data.ts';
-
+import { Router, Request, Response } from 'express';
+import { Logger } from './helpers/logger.js';
+import { Database } from './database/database.js';
+import { ticketParserMiddleware } from './middlewares/ticket-parser.js';
+import { authenticatedMiddleware } from './middlewares/is-authenticated.js';
+import { createClientData } from './create-client-data.js';
+import type { Player } from './models/player.js';
+import type { InitialData } from './models/initial-data.js';
 
 const logger: Logger = new Logger('EventSender');
-const clients: Map<Player['id'], ServerSentEventTarget> = new Map();
-const router = new Router<ContextState>();
+const clients: Map<Player['id'], Response> = new Map();
+const router = Router();
 
 router.use(ticketParserMiddleware);
 router.use(authenticatedMiddleware);
 
-router.get('/sse', async ctx => 
-{
-	logger.log('SEE connection');
+router.get('/sse', async (req: Request, res: Response) => {
+	logger.log('SSE connection');
 
-	let player: Player | null = await Database.getFullPlayer(ctx.state.ticket!.playerId)!;
-	let initialData: InitialData | null = await createInitialData(player);
-	let client: ServerSentEventTarget | null = await ctx.sendEvents();
+	// Set headers for SSE
+	res.setHeader('Content-Type', 'text/event-stream');
+	res.setHeader('Cache-Control', 'no-cache');
+	res.setHeader('Connection', 'keep-alive');
+	res.flushHeaders();
 
-	// const playerId = player!.id;
+	let player: Player | null = await Database.getFullPlayer(req.ticket!.playerId)!;
+	let initialData: InitialData | null = await createClientData(player);
+	const client = res;
 
-	client.addEventListener('close', _event =>
-	{
-		logger.log('SEE disconnection');
-		// MatchMaker.notifyPlayerDisconnected(playerId);
+	req.on('close', () => {
+		logger.log('SSE disconnection');
+		// MatchMaker.notifyPlayerDisconnected(player.id);
 	});
 
 	clients.set(player.id, client);
 
-	send(player.id, 'initial_data', initialData);
+	send(player.id, 'Client_Data', initialData);
 
 	player = null;
 	initialData = null;
-	client = null;
 });
 
-
-function send(playerId: Player['id'], eventName: string, data: object | null = null): void
-{
-	// logger.log(`* --> [${eventName}]`);
-	clients.get(playerId)?.dispatchMessage({
-		name: eventName,
-		json: JSON.stringify(data)
-	});
+function send(playerId: Player['id'], eventName: string, data: object | null = null): void {
+	const json = JSON.stringify(data);
+	clients.get(playerId)?.write(`data:${JSON.stringify({ name: eventName, json })}\n\n`);
 }
 
-function disconnect(playerId: Player['id']): void
-{
+function disconnect(playerId: Player['id']): void {
 	const client = clients.get(playerId);
-	
-	if (client != undefined && !client.closed)
-		client.close();
+	if (client) {
+		client.end();
+	}
 }
 
-function isConnected(playerId: Player['id']): boolean
-{
+function isConnected(playerId: Player['id']): boolean {
 	return clients.has(playerId);
 }
 
-
-export const EventSender = 
-{
+export const EventSender = {
 	router,
 	send,
 	disconnect,

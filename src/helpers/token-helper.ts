@@ -1,6 +1,5 @@
 import tnacl from 'tweetnacl';
-import { Buffer } from 'node:buffer';
-import { randomBytes } from 'node:crypto';
+import { randomBytes } from 'crypto';
 
 const secret = randomBytes(32);
 

@@ -1,4 +1,4 @@
-import { Tile } from './tile.ts';
+import { Tile } from './tile.js';
 
 export interface Track {
 	id: string;

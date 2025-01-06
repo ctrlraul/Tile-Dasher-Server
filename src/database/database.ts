@@ -1,12 +1,13 @@
-import { Kysely, PostgresDialect, Insertable, Transaction, type Selectable, CamelCasePlugin } from 'kysely';
-import { jsonArrayFrom } from 'kysely/helpers/postgres';
 import pg from 'pg';
-import * as Schema from './schema.ts';
-import type { Player } from '../models/player.ts';
-import { Tile } from '../models/tile.ts';
-import { Track } from '../models/track.ts';
+import * as Schema from './schema.js';
+import { Kysely, PostgresDialect, Insertable, Transaction, Selectable, CamelCasePlugin } from 'kysely';
+import { jsonArrayFrom } from 'kysely/helpers/postgres';
+import { Player } from '../models/player.js';
+import { Tile } from '../models/tile.js';
+import { Track } from '../models/track.js';
 import { uuidv7 } from 'uuidv7';
-import { Matter } from '../enums/matter.ts';
+import { env } from '../helpers/env.js';
+import { tiles } from './tiles.js';
 
 
 type OptionalTrx = Transaction<Schema.DB> | null;
@@ -17,7 +18,7 @@ const ticketsCache: Map<string, Selectable<Schema.Tickets>> = new Map();
 const kysely: Kysely<Schema.DB> = new Kysely<Schema.DB>({
 	dialect: new PostgresDialect({
 		pool: new pg.Pool({
-			connectionString: Deno.env.get('DATABASE_URL')
+			connectionString: env('DATABASE_URL')
 		})
 	}),
 	plugins: [
@@ -28,6 +29,8 @@ const kysely: Kysely<Schema.DB> = new Kysely<Schema.DB>({
 
 
 // Tickets
+
+export type Ticket = Selectable<Schema.Tickets>;
 
 async function getTicket(id: Selectable<Schema.Tickets>['id'])
 {
@@ -154,52 +157,6 @@ async function createAuthWithGoogle(data: Insertable<Schema.AuthWithGoogle>, trx
 
 // Tiles
 
-const tiles: Tile[] = [{
-	id: 0,
-	name: 'Air',
-	atlasX: 0,
-	atlasY: 0,
-	matter: Matter.Air,
-	safe: false,
-	effects: {},
-}, {
-	id: 1,
-	name: 'Stone',
-	atlasX: 1,
-	atlasY: 0,
-	matter: Matter.Stone,
-	safe: true,
-	effects: {},
-}, {
-	id: 2,
-	name: 'Bad Stone',
-	atlasX: 2,
-	atlasY: 0,
-	matter: Matter.Stone,
-	safe: false,
-	effects: {
-		Bump: ['break']
-	},
-}, {
-	id: 3,
-	name: 'Spawn',
-	atlasX: 3,
-	atlasY: 0,
-	matter: Matter.Air,
-	safe: false,
-	effects: {},
-}, {
-	id: 4,
-	name: 'Bad Stone',
-	atlasX: 4,
-	atlasY: 0,
-	matter: Matter.Stone,
-	safe: false,
-	effects: {
-		Any: ['vanish']
-	},
-}];
-
 function getTiles(): Promise<Tile[]>
 {
 	return new Promise(resolve => resolve(tiles));
@@ -281,6 +238,16 @@ async function getTrack(id: Track['id'], trx: OptionalTrx = null): Promise<Track
 	};
 }
 
+async function deleteTrack(playerId: Player['id'], id: Track['id'], trx: OptionalTrx = null): Promise<void>
+{
+	const client = trx ?? kysely;
+	await client
+		.deleteFrom('tracks')
+		.where('id', '=', id)
+		.where('playerId', '=', playerId)
+		.executeTakeFirstOrThrow();
+}
+
 async function incrementTrackPlays(id: Track['id'], amount: number = 1, trx: OptionalTrx = null): Promise<void>
 {
 	const client = trx ?? kysely;
@@ -321,6 +288,7 @@ export const Database = {
 	createTrack,
 	updateTrack,
 	getTrack,
+	deleteTrack,
 	incrementTrackPlays,
 
 	transaction,
