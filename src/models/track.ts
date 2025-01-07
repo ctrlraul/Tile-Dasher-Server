@@ -7,4 +7,5 @@ export interface Track {
 	plays: number;
 	customTiles: Record<string, Tile>;
 	tileCoords: Record<string, number[]>;
+	author: string;
 }

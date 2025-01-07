@@ -11,6 +11,12 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
+export interface AuthWithDiscord {
+  createdAt: Generated<Timestamp>;
+  id: string;
+  playerId: string;
+}
+
 export interface AuthWithGoogle {
   createdAt: Generated<Timestamp>;
   id: string;
@@ -44,6 +50,7 @@ export interface Tracks {
 }
 
 export interface DB {
+  authWithDiscord: AuthWithDiscord;
   authWithGoogle: AuthWithGoogle;
   players: Players;
   tickets: Tickets;

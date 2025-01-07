@@ -4,4 +4,5 @@ export interface TrackInfo
 	createdAt: Date;
 	name: string;
 	plays: number;
+	author: string;
 }

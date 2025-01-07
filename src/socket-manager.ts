@@ -1,11 +1,15 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { Logger } from './helpers/logger.js';
 import { Player } from './models/player.js';
-import { createClientData } from './create-client-data.js';
+import { ClientDataManager } from './client-data-manager.js';
 import { TicketName } from './middlewares/ticket-parser.js';
 import { Database, Ticket } from './database/database.js';
 import { $array, $null, $number, $object, $objectStrict, $record, $string, $union } from './helpers/purity.js';
 import { Track } from './models/track.js';
+import { RaceQueueEnter } from './models/race-queue-enter.js';
+import { PlayerProfile } from './models/player-profile.js';
+import { RaceQueueLeave } from './models/race-queue-leave.js';
+import { RacesQueuer } from './races-queuer.js';
 
 
 interface ClientMessage {
@@ -40,6 +44,10 @@ class InteractiveClientMessage implements ClientMessage {
 
 	public respond(data: any = null)
 	{
+		// Don't log since a manipulated message might cause this anyway
+		if (this.exchangeId === null)
+			return;
+
 		if (this.completed)
 			logger.log(`Attempted to resolve an already resolved ClientMessage with event name '${this.eventName}'`);
 		else
@@ -48,6 +56,10 @@ class InteractiveClientMessage implements ClientMessage {
 
 	public reject(error: string | null = null)
 	{
+		// Don't log since a manipulated message might cause this anyway
+		if (this.exchangeId === null)
+			return;
+
 		if (this.completed)
 			logger.log(`Attempted to resolve an already resolved ClientMessage with event name '${this.eventName}'`);
 		else
@@ -84,7 +96,7 @@ class Socket
 	public respondMessage(clientMessage: ClientMessage, data: unknown = null)
 	{
 		const serverMessage: ServerMessage = {
-			eventName: clientMessage.eventName,
+			eventName: clientMessage.eventName + '_Success',
 			data: JSON.stringify(data),
 			error: null,
 			exchangeId: clientMessage.exchangeId
@@ -98,7 +110,7 @@ class Socket
 	public rejectMessage(clientMessage: ClientMessage, error: string | null = null)
 	{
 		const serverMessage: ServerMessage = {
-			eventName: clientMessage.eventName,
+			eventName: clientMessage.eventName + '_Error',
 			data: null,
 			error: error,
 			exchangeId: clientMessage.exchangeId
@@ -147,9 +159,20 @@ function get(playerId: Player['id'])
 	return sockets.get(playerId) || null;
 }
 
+function sendGlobal(eventName: string, data: unknown): void
+{
+	for (const socket of sockets.values())
+		socket.send(eventName, data);
+}
+
 function isConnected(playerId: Player['id'])
 {
 	return sockets.has(playerId);
+}
+
+function disconnect(playerId: Player['id'])
+{
+	sockets.get(playerId)?.close();
 }
 
 async function getTicket(request: any): Promise<Ticket | null>
@@ -170,67 +193,122 @@ async function getTicket(request: any): Promise<Ticket | null>
 async function gotMessage(message: InteractiveClientMessage)
 {
 	const data = message.data && JSON.parse(message.data);
+	const { playerId } = message.socket;
 
-	switch (message.eventName)
+	try
 	{
-		case 'Track': {
-			const trackId = data;
-			if (!trackId)
-				return message.reject('id is required');
-			const track: Track = await Database.getTrack(trackId);
-			message.respond(track);
-			break;
-		}
+		switch (message.eventName)
+		{
+			case 'Track':
+			{
+				const trackId = data;
+			
+				if (typeof trackId !== 'string' || trackId === '')
+					throw new Error('Invalid track id');
 
-		case 'Track_Create': {
-			const upload = $trackCreateCheck.assert(data);
-			const track = await Database.createTrack({
-				name: upload.name,
-				playerId: message.socket.playerId,
-				tileCoords: upload.tileCoords
-			});
-			message.respond(track);
-			break;
-		}
+				const track: Track = await Database.getTrack(trackId);
+				message.respond(track);
+				break;
+			}
 
-		case 'Track_Update': {
-			const upload = $trackUpdateCheck.assert(data);
-			const track = await Database.updateTrack({
-				id: upload.id,
-				name: upload.name,
-				playerId: message.socket.playerId,
-				tileCoords: upload.tileCoords
-			});
-			message.respond(track);
-			break;
-		}
+			case 'Track_Create':
+			{
+				const upload = $trackCreateCheck.assert(data);
+				const track = await Database.createTrack({
+					name: upload.name,
+					playerId: playerId,
+					tileCoords: upload.tileCoords
+				});
+				ClientDataManager.notifyTrackPublished(track);
+				message.respond(track);
+				break;
+			}
 
-		case 'Track_Delete': {
-			const trackId = data;
-			if (!trackId)
-				return message.reject('id is required');
-			await Database.deleteTrack(message.socket.playerId, trackId);
-			message.respond();
-			break;
-		}
+			case 'Track_Update':
+			{
+				const upload = $trackUpdateCheck.assert(data);
+				const track = await Database.updateTrack({
+					id: upload.id,
+					name: upload.name,
+					playerId: playerId,
+					tileCoords: upload.tileCoords
+				});
+				ClientDataManager.notifyTrackPublished(track);
+				message.respond(track);
+				break;
+			}
 
-		case 'Track_Play': {
-			const trackId = data;
-			if (!trackId)
-				return message.reject('id is required');
-			const track: Track = await Database.getTrack(trackId);
-			Database.incrementTrackPlays(trackId)
-				.catch(error => console.log('Error incrementing track plays:', error));
-			message.respond(track);
-			break;
-		}
+			case 'Track_Delete':
+			{
+				const trackId = data;
+			
+				if (typeof trackId !== 'string' || trackId === '')
+					throw new Error('Invalid track id');
 
-		default:
-			logger.log('Unhandled event name:', message.eventName);
-			break;
+				await Database.deleteTrack(playerId, trackId);
+
+				ClientDataManager.notifyTrackDeleted(trackId);
+
+				message.respond();
+
+				break;
+			}
+
+
+			case 'Play_Track':
+			{
+				const trackId = data;
+			
+				if (typeof trackId !== 'string' || trackId === '')
+					throw new Error('Invalid track id');
+
+				const track: Track = await Database.getTrack(trackId);
+
+				Database.incrementTrackPlays(trackId)
+					.catch(error => console.log('Error incrementing track plays:', error));
+
+				message.respond(track);
+
+				break;
+			}
+
+
+			case 'Race_Queue_Enter':
+			{
+				const trackId = data;
+			
+				if (typeof trackId !== 'string' || trackId === '')
+					throw new Error('Invalid track id');
+
+				RacesQueuer.enqueue(playerId, trackId);
+				message.respond();
+
+				break;
+			}
+
+			case 'Race_Queue_Leave':
+			{
+				RacesQueuer.dequeue(playerId);
+				break;
+			}
+
+			case 'Race_Queue_Ready':
+			{
+				RacesQueuer.setReady(playerId);
+				break;
+			}
+
+
+			default:
+				logger.log('Unhandled event name:', message.eventName);
+				break;
+		}
+	}
+	catch (error)
+	{
+		message.reject(error instanceof Error ? error.message : String(error));
 	}
 }
-
 
 
 wss.on('connection', async (ws, req) =>
@@ -249,7 +327,7 @@ wss.on('connection', async (ws, req) =>
 	try
 	{
 		const player = await Database.getFullPlayer(ticket.playerId);
-		const clientData = await createClientData(player);
+		const clientData = await ClientDataManager.createForPlayer(player);
 		socket.playerId = player.id;
 		sockets.set(player.id, socket);
 		socket.send('Client_Data', clientData);
@@ -280,6 +358,7 @@ wss.on('connection', async (ws, req) =>
 
 	ws.on('close', () => {
 		// logger.log('Disconnection');
+		sockets.delete(socket.playerId);
 	});
 });
 
@@ -288,4 +367,7 @@ wss.addListener('listening', () => logger.log('Listening'));
 
 export const SocketManager = {
 	get,
+	isConnected,
+	sendGlobal,
+	disconnect,
 };

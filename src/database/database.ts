@@ -1,13 +1,15 @@
 import pg from 'pg';
 import * as Schema from './schema.js';
 import { Kysely, PostgresDialect, Insertable, Transaction, Selectable, CamelCasePlugin } from 'kysely';
-import { jsonArrayFrom } from 'kysely/helpers/postgres';
+import { jsonArrayFrom, jsonObjectFrom } from 'kysely/helpers/postgres';
 import { Player } from '../models/player.js';
 import { Tile } from '../models/tile.js';
 import { Track } from '../models/track.js';
 import { uuidv7 } from 'uuidv7';
 import { env } from '../helpers/env.js';
 import { tiles } from './tiles.js';
+import { PlayerProfile } from '../models/player-profile.js';
+import { TrackInfo } from '../models/track-info.js';
 
 
 type OptionalTrx = Transaction<Schema.DB> | null;
@@ -71,8 +73,6 @@ async function getTicketForPlayerId(playerId: Selectable<Schema.Players>['id'])
 
 async function createTicket(data: Insertable<Schema.Tickets>)
 {
-	console.log(data);
-
 	const ticket = await kysely
 		.insertInto('tickets')
 		.values(data)
@@ -115,10 +115,19 @@ async function getFullPlayer(id: Selectable<Schema.Players>['id']): Promise<Play
 	
 	const player: Player = {
 		...result,
-		trackInfos: result.tracks,
+		trackInfos: result.tracks.map(track => ({ ...track, author: result.name })),
 	};
 	
 	return player;
+}
+
+async function getPlayerProfile(id: Selectable<Schema.Players>['id']): Promise<PlayerProfile>
+{
+	return await kysely
+		.selectFrom('players')
+		.where('id', '=', id)
+		.select(['id', 'name', 'level', 'lastSeen'])
+		.executeTakeFirstOrThrow();
 }
 
 async function createPlayer(data: Insertable<Schema.Players>, trx: OptionalTrx = null)
@@ -149,6 +158,28 @@ async function createAuthWithGoogle(data: Insertable<Schema.AuthWithGoogle>, trx
 	const client = trx ?? kysely;
 	await client
 		.insertInto('authWithGoogle')
+		.values(data)
+		.execute();
+}
+
+
+
+// Auths with Discord
+
+async function getAuthWithDiscord(id: string)
+{
+	return await kysely
+		.selectFrom('authWithDiscord')
+		.selectAll()
+		.where('id', '=', id)
+		.executeTakeFirst();
+}
+
+async function createAuthWithDiscord(data: Insertable<Schema.AuthWithDiscord>, trx: OptionalTrx = null): Promise<void>
+{
+	const client = trx ?? kysely;
+	await client
+		.insertInto('authWithDiscord')
 		.values(data)
 		.execute();
 }
@@ -186,10 +217,17 @@ async function createTrack(data: CreateTrackData, trx: OptionalTrx = null): Prom
 		.returningAll()
 		.executeTakeFirstOrThrow();
 	
+	const author = await client
+		.selectFrom('players')
+		.where('id', '=', result.playerId)
+		.select('name')
+		.executeTakeFirstOrThrow();
+	
 	return {
 		...result,
 		tileCoords: JSON.parse(result.tileCoords),
-		customTiles: {}
+		customTiles: {},
+		author: author.name
 	};
 }
 
@@ -215,10 +253,17 @@ async function updateTrack(data: UpdateTrackData, trx: OptionalTrx = null): Prom
 		.returningAll()
 		.executeTakeFirstOrThrow();
 
+	const author = await client
+		.selectFrom('players')
+		.where('id', '=', result.playerId)
+		.select('name')
+		.executeTakeFirstOrThrow();
+		
 	return {
 		...result,
 		tileCoords: JSON.parse(result.tileCoords),
-		customTiles: {}
+		customTiles: {},
+		author: author.name
 	};
 }
 
@@ -228,13 +273,21 @@ async function getTrack(id: Track['id'], trx: OptionalTrx = null): Promise<Track
 	const result = await client
 		.selectFrom('tracks')
 		.selectAll()
+		.select(eb => [
+			jsonObjectFrom(
+				eb.selectFrom('players')
+				.select('name')
+				.whereRef('tracks.playerId', '=', 'players.id')
+			).as('author')
+		])
 		.where('id', '=', id)
 		.executeTakeFirstOrThrow();
 
 	return {
 		...result,
 		tileCoords: JSON.parse(result.tileCoords),
-		customTiles: {}
+		customTiles: {},
+		author: result.author!.name
 	};
 }
 
@@ -260,6 +313,50 @@ async function incrementTrackPlays(id: Track['id'], amount: number = 1, trx: Opt
 		.execute();
 }
 
+async function trackExists(id: Track['id']): Promise<boolean>
+{
+	const result = await kysely
+		.selectFrom('tracks')
+		.where('id', '=', id)
+		.select('id')
+		.limit(1)
+		.executeTakeFirst();
+
+	return result !== undefined;
+}
+
+async function getLatestTracks(count: number): Promise<TrackInfo[]>
+{
+	const result = await kysely
+		.selectFrom('tracks')
+		.select([
+			'id',
+			'createdAt',
+			'name',
+			'plays'
+		])
+		.select(eb => [
+			jsonObjectFrom(
+				eb.selectFrom('players')
+				.select('name')
+				.whereRef('tracks.playerId', '=', 'players.id')
+			).as('author')
+		])
+		.orderBy('id', 'desc')
+		.limit(count)
+		.execute();
+	
+	const tracksInfo: TrackInfo[] = result.map(raw => ({
+		id: raw.id,
+		name: raw.name,
+		createdAt: raw.createdAt,
+		plays: raw.plays,
+		author: raw.author!.name
+	}));
+
+	return tracksInfo;
+}
+
 
 
 // Other utility methods
@@ -278,10 +375,14 @@ export const Database = {
 	deleteTicket,
 	
 	getFullPlayer,
+	getPlayerProfile,
 	createPlayer,
 	
 	getAuthWithGoogle,
 	createAuthWithGoogle,
+
+	getAuthWithDiscord,
+	createAuthWithDiscord,
 
 	getTiles,
 
@@ -290,6 +391,8 @@ export const Database = {
 	getTrack,
 	deleteTrack,
 	incrementTrackPlays,
+	trackExists,
+	getLatestTracks,
 
 	transaction,
 };
