@@ -11,13 +11,7 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
-export interface AuthWithDiscord {
-  createdAt: Generated<Timestamp>;
-  id: string;
-  playerId: string;
-}
-
-export interface AuthWithGoogle {
+export interface AuthMethods {
   createdAt: Generated<Timestamp>;
   id: string;
   playerId: string;
@@ -25,7 +19,7 @@ export interface AuthWithGoogle {
 
 export interface Players {
   createdAt: Generated<Timestamp>;
-  email: string;
+  email: string | null;
   id: string;
   lastSeen: Generated<Timestamp>;
   level: Generated<number>;
@@ -36,6 +30,7 @@ export interface Players {
 export interface Tickets {
   createdAt: Generated<Timestamp>;
   id: string;
+  isGuest: Generated<boolean>;
   playerId: string;
 }
 
@@ -50,8 +45,7 @@ export interface Tracks {
 }
 
 export interface DB {
-  authWithDiscord: AuthWithDiscord;
-  authWithGoogle: AuthWithGoogle;
+  authMethods: AuthMethods;
   players: Players;
   tickets: Tickets;
   tracks: Tracks;

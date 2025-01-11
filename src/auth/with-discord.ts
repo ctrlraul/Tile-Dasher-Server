@@ -1,12 +1,10 @@
-import { uuidv7 } from 'uuidv7';
 import { Database } from '../database/database.js';
-import { TokenHelper } from '../helpers/token-helper.js';
 import { Request, Response } from 'express';
 import { AuthState, Oauth } from '../middlewares/oauth.js';
 import { TicketName } from '../middlewares/ticket-parser.js';
 import * as oauth from 'oauth4webapi';
-import { Player } from '../models/player.js';
 import { env } from '../helpers/env.js';
+import { AuthManager, RegisterInfo } from './auth-manager.js';
 
 
 interface DiscordAccountInfo {
@@ -31,7 +29,7 @@ interface DiscordAccountInfo {
 }
 
 
-async function getDiscordAccountInfo(accessToken: string): Promise<DiscordAccountInfo>
+async function getRegisterInfoForDiscordAccount(accessToken: string): Promise<RegisterInfo>
 {
 	const response = await fetch('https://discord.com/api/users/@me', {
 		headers: {
@@ -44,54 +42,23 @@ async function getDiscordAccountInfo(accessToken: string): Promise<DiscordAccoun
 
 	const accountInfo = await response.json() as DiscordAccountInfo;
 
-	return accountInfo; 
-}
-
-async function getOrCreatePlayerIdForDiscord(accountInfo: DiscordAccountInfo): Promise<Player['id']>
-{
-	const auth = await Database.getAuthWithDiscord(accountInfo.id);
-
-	if (auth != undefined)
-		return auth.playerId;
-
-	const playerId = uuidv7();
-
-	// Create full player
-	await Database.transaction(async trx =>
-	{
-		// Insert player
-		const player = await Database.createPlayer({
-			id: playerId,
-			name: accountInfo.global_name,
-			email: accountInfo.email,
-		}, trx);
-
-		// Insert auth method
-		await Database.createAuthWithDiscord({
-			id: accountInfo.id,
-			playerId: player.id,
-		}, trx);
-
-		return player.id;
-	});
-
-	return playerId;
+	return {
+		id: accountInfo.id,
+		name: accountInfo.global_name,
+		email: accountInfo.email,
+	}; 
 }
 
 async function onTokensReceived(_req: Request, res: Response, state: AuthState, tokens: oauth.TokenEndpointResponse)
 {
-	const accountInfo = await getDiscordAccountInfo(tokens.access_token);
-	const playerId = await getOrCreatePlayerIdForDiscord(accountInfo);
-	const ticket = await Database.createTicket({
-		id: TokenHelper.generateSessionToken(),
-		playerId: playerId,
-	});
-
+	const registerInfo = await getRegisterInfoForDiscordAccount(tokens.access_token);
+	const playerId = await AuthManager.findOrRegisterPlayer(Database.AuthMethod.Discord, registerInfo);
+	const ticket = await Database.createTicket(playerId);
 	res.redirect(`http://localhost:${state.clientPort}/?${TicketName}=${ticket.id}`);
 }
 
-export const middleware = Oauth({
-	route: '/auth/discord',
+
+export const discordAuth = Oauth({
 	clientId: env('DISCORD_CLIENT_ID'),
 	clientSecret: env('DISCORD_CLIENT_SECRET'),
 	issuer: 'https://discord.com',

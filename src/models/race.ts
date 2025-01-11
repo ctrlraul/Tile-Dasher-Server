@@ -2,7 +2,9 @@ import { PlayerProfile } from "./player-profile.js";
 import { Track } from "./track.js";
 
 export interface Race {
-	startTime: Date;
+	id: string;
+	startTime: number;
 	players: PlayerProfile[];
 	track: Track;
+	type: string;
 }

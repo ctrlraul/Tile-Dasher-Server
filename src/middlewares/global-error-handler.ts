@@ -1,13 +1,22 @@
 import { ErrorRequestHandler } from 'express';
+import { Logger } from '../helpers/logger.js';
+import chalk from 'chalk';
 
-export const globalErrorHandler: ErrorRequestHandler = (err, req, res, next) => {
-
-	console.error(`[${req.path}] Error: ${err.message}`);
-
+export const globalErrorHandler: ErrorRequestHandler = (error, req, res, next) =>
+{
 	if (res.statusCode == 200)
-		res.statusCode = 500;
+		res.status(500);
 
-	res.send(err.message);
-	next();
+	res.contentType('text/plain');
 
+	if (error instanceof Error)
+	{
+		Logger.error(`In route ${chalk.red(req.path)}:`, error);
+		res.send(`Error: ${error.message}`);
+	}
+	else
+	{
+		Logger.error(`In route ${chalk.red(req.path)}:`, error);
+		res.send('Something went wrong!');
+	}
 };

@@ -10,12 +10,14 @@ import { env } from '../helpers/env.js';
 import { tiles } from './tiles.js';
 import { PlayerProfile } from '../models/player-profile.js';
 import { TrackInfo } from '../models/track-info.js';
+import { TokenHelper } from '../helpers/token-helper.js';
+import { ClientDataManager } from '../client-data-manager.js';
 
 
 type OptionalTrx = Transaction<Schema.DB> | null;
 
-const ticketsCache: Map<string, Selectable<Schema.Tickets>> = new Map();
 
+const ticketsCache: Map<string, Selectable<Schema.Tickets>> = new Map();
 
 const kysely: Kysely<Schema.DB> = new Kysely<Schema.DB>({
 	dialect: new PostgresDialect({
@@ -27,6 +29,17 @@ const kysely: Kysely<Schema.DB> = new Kysely<Schema.DB>({
 		new CamelCasePlugin()
 	]
 });
+
+const AuthMethod = {
+	Google: 'google',
+	Discord: 'discord',
+};
+
+const PlayerRoles = {
+	Guest: 'guest',
+	Regular: 'regular',
+	Admin: 'admin',
+};
 
 
 
@@ -71,11 +84,16 @@ async function getTicketForPlayerId(playerId: Selectable<Schema.Players>['id'])
 	return ticket;
 }
 
-async function createTicket(data: Insertable<Schema.Tickets>)
+async function createTicket(playerId: string, isGuest: boolean = false, trx: OptionalTrx = null)
 {
-	const ticket = await kysely
+	const client = trx ?? kysely;
+	const ticket = await client
 		.insertInto('tickets')
-		.values(data)
+		.values({
+			id: TokenHelper.generateSessionToken(),
+			playerId,
+			isGuest,
+		})
 		.returningAll()
 		.executeTakeFirstOrThrow();
 	
@@ -133,54 +151,54 @@ async function getPlayerProfile(id: Selectable<Schema.Players>['id']): Promise<P
 async function createPlayer(data: Insertable<Schema.Players>, trx: OptionalTrx = null)
 {
 	const client = trx ?? kysely;
-	return await client
+	await client
 		.insertInto('players')
 		.values(data)
-		.returningAll()
-		.executeTakeFirstOrThrow();
+		.execute();
 }
 
-
-
-// Auths with Google
-
-async function getAuthWithGoogle(id: string)
-{
-	return await kysely
-		.selectFrom('authWithGoogle')
-		.selectAll()
-		.where('id', '=', id)
-		.executeTakeFirst();
-}
-
-async function createAuthWithGoogle(data: Insertable<Schema.AuthWithGoogle>, trx: OptionalTrx = null): Promise<void>
+async function deletePlayer(playerId: Player['id'], trx: OptionalTrx = null)
 {
 	const client = trx ?? kysely;
 	await client
-		.insertInto('authWithGoogle')
-		.values(data)
+		.deleteFrom('players')
+		.where('id', '=', playerId)
+		.execute();
+}
+
+async function updatePlayerLastSeen(playerId: Player['id'], trx: OptionalTrx = null)
+{
+	const client = trx ?? kysely;
+	await client
+		.updateTable('players')
+		.where('id', '=', playerId)
+		.set({ lastSeen: new Date() })
+		.returningAll()
 		.execute();
 }
 
 
 
-// Auths with Discord
+// Auth methods
 
-async function getAuthWithDiscord(id: string)
+async function getAuthMethod(method: string, methodAccountId: string)
 {
 	return await kysely
-		.selectFrom('authWithDiscord')
+		.selectFrom('authMethods')
 		.selectAll()
-		.where('id', '=', id)
+		.where('id', '=', method + ':' + methodAccountId)
 		.executeTakeFirst();
 }
 
-async function createAuthWithDiscord(data: Insertable<Schema.AuthWithDiscord>, trx: OptionalTrx = null): Promise<void>
+async function createAuthMethod(method: string, methodAccountId: string, playerId: string, trx: OptionalTrx = null): Promise<void>
 {
 	const client = trx ?? kysely;
 	await client
-		.insertInto('authWithDiscord')
-		.values(data)
+		.insertInto('authMethods')
+		.values({
+			id: method + ':' + methodAccountId,
+			playerId,
+		})
 		.execute();
 }
 
@@ -311,6 +329,8 @@ async function incrementTrackPlays(id: Track['id'], amount: number = 1, trx: Opt
 			plays: eb('plays', '+', amount)
 		}))
 		.execute();
+	
+	ClientDataManager.notifyTrackPlaysIncremented(id, amount);
 }
 
 async function trackExists(id: Track['id']): Promise<boolean>
@@ -368,6 +388,8 @@ function transaction<T>(fn: (trx: Transaction<Schema.DB>) => Promise<T>, trx: Op
 
 export const Database = {
 	kysely,
+	AuthMethod,
+	PlayerRoles,
 	
 	getTicket,
 	getTicketForPlayerId,
@@ -377,12 +399,11 @@ export const Database = {
 	getFullPlayer,
 	getPlayerProfile,
 	createPlayer,
+	deletePlayer,
+	updatePlayerLastSeen,
 	
-	getAuthWithGoogle,
-	createAuthWithGoogle,
-
-	getAuthWithDiscord,
-	createAuthWithDiscord,
+	getAuthMethod,
+	createAuthMethod,
 
 	getTiles,
 

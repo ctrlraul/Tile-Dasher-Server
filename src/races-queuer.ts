@@ -9,11 +9,17 @@ import { RaceQueueLeave } from './models/race-queue-leave.js';
 import { Track } from './models/track.js';
 import { SocketManager } from './socket-manager.js';
 import { RacesQueueEntry } from './models/races-queue-entry.js';
+import { RaceCharacterUpdate } from './models/race-character-update.js';
+import { uuidv7 } from 'uuidv7';
+import { RaceCharacterFinish } from './models/race-character-finish.js';
+import { RaceType } from './enums/race-type.js';
 
 
 const logger: Logger = new Logger('RaceQueuer');
 const queue: Record<Track['id'], RacesQueueEntry> = Object.create(null);
 const queuedPlayers: Map<Player['id'], Track['id']> = new Map();
+const races: Record<Race['id'], Race> = Object.create(null);
+const racingPlayers: Map<Player['id'], Race['id']> = new Map();
 
 
 async function enqueue(playerId: string, trackId: string): Promise<void>
@@ -86,6 +92,39 @@ function setReady(playerId: Player['id']): void
 	}
 }
 
+function characterUpdate(update: RaceCharacterUpdate): void
+{
+	const raceId = racingPlayers.get(update.id);
+
+	if (!raceId)
+		return;
+
+	const race = races[raceId];
+
+	for (const player of race.players)
+		SocketManager.get(player.id)?.send('Race_Character_Update', update);
+}
+
+function characterFinished(playerId: Player['id']): void
+{
+	const raceId = racingPlayers.get(playerId);
+
+	if (!raceId)
+		return;
+
+	const race = races[raceId];
+	const data: RaceCharacterFinish = {
+		playerId,
+		time: Date.now() - race.startTime,
+	};
+
+	for (const player of race.players)
+	{
+		if (player.id != playerId)
+			SocketManager.get(player.id)?.send('Race_Character_Finish', data);
+	}
+}
+
 
 async function getOrCreateEntry(trackId: string): Promise<RacesQueueEntry>
 {
@@ -118,25 +157,30 @@ async function startRace(trackId: string)
 		const players = Object.values(entry.players);
 		const track = await Database.getTrack(trackId);
 		const race: Race = {
+			id: uuidv7(),
 			players,
-			startTime: new Date(),
+			startTime: Date.now(),
 			track,
+			type: RaceType.Online,
 		};
 
+
 		delete queue[trackId];
+		races[race.id] = race;
 
 		for (const playerId of entry.playersReady)
 		{
 			queuedPlayers.delete(playerId);
+			racingPlayers.set(playerId, race.id);
 			SocketManager.get(playerId)?.send('Race_Start', race);
 		}
 
 		Database.incrementTrackPlays(trackId, players.length)
-			.catch(error => console.log('Error incrementing track plays:', error));
+			.catch(error => logger.error('Failed to increment track plays:', error));
 	}
 	catch (error)
 	{
-		logger.log('Error starting race:', error);
+		logger.info('Error starting race:', error);
 	}
 }
 
@@ -146,4 +190,6 @@ export const RacesQueuer = {
 	enqueue,
 	dequeue,
 	setReady,
+	characterUpdate,
+	characterFinished,
 };

@@ -37,7 +37,13 @@ function buildAndRestart()
 function runFromPackageJson(scriptName)
 {
 	const startCmd = packageJson.scripts[scriptName].split(' ');
-	return spawn(startCmd.shift(), startCmd, { stdio: 'inherit' });
+	return spawn(startCmd.shift(), startCmd, {
+		stdio: 'inherit',
+		env: {
+			...process.env,
+			FORCE_COLOR: true
+		}
+	});
 }
 
 

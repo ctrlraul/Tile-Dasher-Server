@@ -6,10 +6,11 @@ import { TicketName } from './middlewares/ticket-parser.js';
 import { Database, Ticket } from './database/database.js';
 import { $array, $null, $number, $object, $objectStrict, $record, $string, $union } from './helpers/purity.js';
 import { Track } from './models/track.js';
-import { RaceQueueEnter } from './models/race-queue-enter.js';
-import { PlayerProfile } from './models/player-profile.js';
-import { RaceQueueLeave } from './models/race-queue-leave.js';
 import { RacesQueuer } from './races-queuer.js';
+import { RaceCharacterUpdate } from './models/race-character-update.js';
+import { MathHelper } from './helpers/math-helper.js';
+import chalk from 'chalk';
+import { env } from './helpers/env.js';
 
 
 interface ClientMessage {
@@ -26,11 +27,15 @@ interface ServerMessage {
 }
 
 
+const dev = env('ENVIRONMENT') == 'development';
+
+
 class InteractiveClientMessage implements ClientMessage {
 	
 	public readonly socket: Socket;
 	public readonly eventName: string;
 	public readonly data: string | null;
+	public readonly parsedData: any;
 	public readonly exchangeId: string | null;
 	public completed: boolean = false;
 
@@ -39,6 +44,7 @@ class InteractiveClientMessage implements ClientMessage {
 		this.socket = socket;
 		this.eventName = clientMessage.eventName;
 		this.data = clientMessage.data;
+		this.parsedData = clientMessage.data && JSON.parse(clientMessage.data);
 		this.exchangeId = clientMessage.exchangeId;
 	}
 
@@ -49,7 +55,7 @@ class InteractiveClientMessage implements ClientMessage {
 			return;
 
 		if (this.completed)
-			logger.log(`Attempted to resolve an already resolved ClientMessage with event name '${this.eventName}'`);
+			logger.info(`Attempted to resolve an already resolved ClientMessage with event name '${this.eventName}'`);
 		else
 			this.socket.respondMessage(this, data);
 	}
@@ -61,7 +67,7 @@ class InteractiveClientMessage implements ClientMessage {
 			return;
 
 		if (this.completed)
-			logger.log(`Attempted to resolve an already resolved ClientMessage with event name '${this.eventName}'`);
+			logger.info(`Attempted to resolve an already resolved ClientMessage with event name '${this.eventName}'`);
 		else
 			this.socket.rejectMessage(this, error);
 	}
@@ -149,8 +155,9 @@ const $trackUpdateCheck = $object({
 
 
 
-const logger = new Logger('WebSocket');
-const wss = new WebSocketServer({ port: 4201 });
+const port = 4201;
+const logger = new Logger('SocketManager');
+const wss = new WebSocketServer({ port });
 const sockets: Map<string, Socket> = new Map();
 
 
@@ -192,12 +199,12 @@ async function getTicket(request: any): Promise<Ticket | null>
 
 async function gotMessage(message: InteractiveClientMessage)
 {
-	const data = message.data && JSON.parse(message.data);
+	const { parsedData: data, eventName } = message;
 	const { playerId } = message.socket;
 
 	try
 	{
-		switch (message.eventName)
+		switch (eventName)
 		{
 			case 'Track':
 			{
@@ -255,8 +262,10 @@ async function gotMessage(message: InteractiveClientMessage)
 			}
 
 
-			case 'Play_Track':
+			case 'Race_Solo':
 			{
+				RacesQueuer.dequeue(playerId);
+
 				const trackId = data;
 			
 				if (typeof trackId !== 'string' || trackId === '')
@@ -265,7 +274,7 @@ async function gotMessage(message: InteractiveClientMessage)
 				const track: Track = await Database.getTrack(trackId);
 
 				Database.incrementTrackPlays(trackId)
-					.catch(error => console.log('Error incrementing track plays:', error));
+					.catch(error => logger.error('Failed to increment track plays:', error));
 
 				message.respond(track);
 
@@ -280,7 +289,7 @@ async function gotMessage(message: InteractiveClientMessage)
 				if (typeof trackId !== 'string' || trackId === '')
 					throw new Error('Invalid track id');
 
-				RacesQueuer.enqueue(playerId, trackId);
+				await RacesQueuer.enqueue(playerId, trackId);
 				message.respond();
 
 				break;
@@ -299,14 +308,42 @@ async function gotMessage(message: InteractiveClientMessage)
 			}
 
 
+			case 'Race_Character_Update':
+			{
+				const update: RaceCharacterUpdate = {
+					id: playerId,
+
+					x: Number(data.x) || 0,
+					y: Number(data.y) || 0,
+					vx: Number(data.vx) || 0,
+					vy: Number(data.vy) || 0,
+
+					ih: MathHelper.clamp(Number(data.ih) || 0, -1, 1),
+					iv: MathHelper.clamp(Number(data.iv) || 0, -1, 1),
+				};
+				
+				RacesQueuer.characterUpdate(update);
+				
+				break;
+			}
+
+			case 'Race_Character_Finish':
+			{
+				RacesQueuer.characterFinished(playerId);
+				break;
+			}
+
+
 			default:
-				logger.log('Unhandled event name:', message.eventName);
+				if (dev)
+					logger.error('Unhandled event name:', message.eventName);
 				break;
 		}
 	}
 	catch (error)
 	{
-		message.reject(error instanceof Error ? error.message : String(error));
+		logger.error({ eventName, playerId, data, error });
+		message.reject(error instanceof Error ? error.message : 'Something went wrong!');
 	}
 }
 
@@ -334,23 +371,23 @@ wss.on('connection', async (ws, req) =>
 	}
 	catch (error)
 	{
-		logger.log('Error loading client data:', error);
+		logger.info('Error loading client data:', error);
 		socket.send('Client_Data_Error');
 		socket.close();
 	}
 
-	ws.on('message', message =>
+	ws.on('message', async message =>
 	{
 		try
 		{
 			const unknown = JSON.parse(message.toString());
 			const clientMessage = $clientMessageChecker.assert(unknown);
 			const interactiveClientMessage = new InteractiveClientMessage(socket, clientMessage);
-			gotMessage(interactiveClientMessage);
+			await gotMessage(interactiveClientMessage);
 		}
 		catch (error)
 		{
-			logger.log('Error processing message:', error);
+			logger.info('Error processing message:', error);
 			// socket.send('Error', 'Bad Message');
 			socket.close();
 		}
@@ -358,11 +395,17 @@ wss.on('connection', async (ws, req) =>
 
 	ws.on('close', () => {
 		// logger.log('Disconnection');
+
 		sockets.delete(socket.playerId);
+
+		RacesQueuer.dequeue(socket.playerId);
+
+		Database.updatePlayerLastSeen(socket.playerId)
+			.catch(error => logger.error(`Failed to update player's last seen:`, error));
 	});
 });
 
-wss.addListener('listening', () => logger.log('Listening'));
+wss.addListener('listening', () => logger.info(`Listening on port ${chalk.yellow(port)}`));
 
 
 export const SocketManager = {
