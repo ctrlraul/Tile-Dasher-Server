@@ -11,6 +11,7 @@ import { RaceCharacterUpdate } from './models/race-character-update.js';
 import { MathHelper } from './helpers/math-helper.js';
 import chalk from 'chalk';
 import { env } from './helpers/env.js';
+import { Server } from 'http';
 
 
 interface ClientMessage {
@@ -157,9 +158,72 @@ const $trackUpdateCheck = $object({
 
 const port = env('ENVIRONMENT') === 'development' ? 4201 : 443;
 const logger = new Logger('SocketManager');
-const wss = new WebSocketServer({ port });
 const sockets: Map<string, Socket> = new Map();
 
+
+function init(server: Server)
+{
+	const wss = new WebSocketServer({ server });
+
+	wss.on('connection', async (ws, req) =>
+	{
+		const socket = new Socket(ws);
+		const ticket = await getTicket(req);
+	
+		if (!ticket)
+		{
+			socket.close();
+			return;
+		}
+	
+		// logger.log('Connection');
+	
+		try
+		{
+			const player = await Database.getFullPlayer(ticket.playerId);
+			const clientData = await ClientDataManager.createForPlayer(player);
+			socket.playerId = player.id;
+			sockets.set(player.id, socket);
+			socket.send('Client_Data', clientData);
+		}
+		catch (error)
+		{
+			logger.info('Error loading client data:', error);
+			socket.send('Client_Data_Error');
+			socket.close();
+		}
+	
+		ws.on('message', async message =>
+		{
+			try
+			{
+				const unknown = JSON.parse(message.toString());
+				const clientMessage = $clientMessageChecker.assert(unknown);
+				const interactiveClientMessage = new InteractiveClientMessage(socket, clientMessage);
+				await gotMessage(interactiveClientMessage);
+			}
+			catch (error)
+			{
+				logger.info('Error processing message:', error);
+				// socket.send('Error', 'Bad Message');
+				socket.close();
+			}
+		});
+	
+		ws.on('close', () => {
+			// logger.log('Disconnection');
+	
+			sockets.delete(socket.playerId);
+	
+			RacesQueuer.dequeue(socket.playerId);
+	
+			Database.updatePlayerLastSeen(socket.playerId)
+				.catch(error => logger.error(`Failed to update player's last seen:`, error));
+		});
+	});
+	
+	// wss.addListener('listening', () => logger.info(`Listening on port ${chalk.yellow(port)}`));
+}
 
 function get(playerId: Player['id'])
 {
@@ -348,67 +412,8 @@ async function gotMessage(message: InteractiveClientMessage)
 }
 
 
-wss.on('connection', async (ws, req) =>
-{
-	const socket = new Socket(ws);
-	const ticket = await getTicket(req);
-
-	if (!ticket)
-	{
-		socket.close();
-		return;
-	}
-
-	// logger.log('Connection');
-
-	try
-	{
-		const player = await Database.getFullPlayer(ticket.playerId);
-		const clientData = await ClientDataManager.createForPlayer(player);
-		socket.playerId = player.id;
-		sockets.set(player.id, socket);
-		socket.send('Client_Data', clientData);
-	}
-	catch (error)
-	{
-		logger.info('Error loading client data:', error);
-		socket.send('Client_Data_Error');
-		socket.close();
-	}
-
-	ws.on('message', async message =>
-	{
-		try
-		{
-			const unknown = JSON.parse(message.toString());
-			const clientMessage = $clientMessageChecker.assert(unknown);
-			const interactiveClientMessage = new InteractiveClientMessage(socket, clientMessage);
-			await gotMessage(interactiveClientMessage);
-		}
-		catch (error)
-		{
-			logger.info('Error processing message:', error);
-			// socket.send('Error', 'Bad Message');
-			socket.close();
-		}
-	});
-
-	ws.on('close', () => {
-		// logger.log('Disconnection');
-
-		sockets.delete(socket.playerId);
-
-		RacesQueuer.dequeue(socket.playerId);
-
-		Database.updatePlayerLastSeen(socket.playerId)
-			.catch(error => logger.error(`Failed to update player's last seen:`, error));
-	});
-});
-
-wss.addListener('listening', () => logger.info(`Listening on port ${chalk.yellow(port)}`));
-
-
 export const SocketManager = {
+	init,
 	get,
 	isConnected,
 	sendGlobal,
