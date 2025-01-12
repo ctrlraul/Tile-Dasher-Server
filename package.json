@@ -7,8 +7,8 @@
 		"postinstall": "npm run build",
 		"schema": "kysely-codegen --camel-case --out-file src/database/schema.ts",
 		"build": "node scripts/build.js",
-		"start": "node --enable-source-maps build/main.js | pino-pretty",
-		"dev": "node scripts/dev.js | pino-pretty",
+		"start": "node --enable-source-maps build/main.js",
+		"dev": "node scripts/dev.js",
 		"check": "tsc --noemit"
 	},
 	"keywords": [],
