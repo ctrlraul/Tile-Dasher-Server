@@ -155,7 +155,7 @@ const $trackUpdateCheck = $object({
 
 
 
-const port = env('ENVIRONMENT') === 'development' ? 4201 : 80;
+const port = env('ENVIRONMENT') === 'development' ? 4201 : 443;
 const logger = new Logger('SocketManager');
 const wss = new WebSocketServer({ port });
 const sockets: Map<string, Socket> = new Map();
