@@ -9,7 +9,6 @@ import { Track } from './models/track.js';
 import { RacesQueuer } from './races-queuer.js';
 import { RaceCharacterUpdate } from './models/race-character-update.js';
 import { MathHelper } from './helpers/math-helper.js';
-import chalk from 'chalk';
 import { env } from './helpers/env.js';
 import { Server } from 'http';
 
@@ -26,9 +25,6 @@ interface ServerMessage {
 	error: string | null;
 	exchangeId: string | null;
 }
-
-
-const dev = env('ENVIRONMENT') == 'development';
 
 
 class InteractiveClientMessage implements ClientMessage {
@@ -155,8 +151,7 @@ const $trackUpdateCheck = $object({
 });
 
 
-
-const port = env('ENVIRONMENT') === 'development' ? 4201 : 443;
+const dev = env('ENVIRONMENT') == 'development';
 const logger = new Logger('SocketManager');
 const sockets: Map<string, Socket> = new Map();
 
@@ -210,12 +205,13 @@ function init(server: Server)
 			}
 		});
 	
-		ws.on('close', () => {
-			// logger.log('Disconnection');
+		ws.on('close', () =>
+		{
+			// logger.info('Disconnection');
 	
 			sockets.delete(socket.playerId);
 	
-			RacesQueuer.dequeue(socket.playerId);
+			RacesQueuer.notifyPlayerDisconnected(socket.playerId);
 	
 			Database.updatePlayerLastSeen(socket.playerId)
 				.catch(error => logger.error(`Failed to update player's last seen:`, error));
@@ -396,6 +392,12 @@ async function gotMessage(message: InteractiveClientMessage)
 				RacesQueuer.characterFinished(playerId);
 				break;
 			}
+
+			case 'Race_Character_Quit': {
+				RacesQueuer.quitRace(playerId);
+				break;
+			}
+
 
 
 			default:

@@ -1,4 +1,3 @@
-import './socket-manager.js';
 import http from 'http';
 import { WebServer } from './web-server.js';
 import { env } from './helpers/env.js';

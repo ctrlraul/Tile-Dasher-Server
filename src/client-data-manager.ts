@@ -11,14 +11,13 @@ const LatestTracksLimit = 12;
 const latestTracks: TrackInfo[] = [];
 const tiles: Tile[] = [];
 
+let loadPromise: Promise<void> | null = null;
+
 
 async function createForPlayer(player: Player): Promise<ClientData>
 {
-	if (latestTracks.length === 0)
-		latestTracks.push(...await Database.getLatestTracks(LatestTracksLimit));
-
-	if (tiles.length === 0)
-		tiles.push(...await Database.getTiles());
+	loadPromise ??= load();
+	await loadPromise;
 
 	return {
 		tiles,
@@ -27,6 +26,13 @@ async function createForPlayer(player: Player): Promise<ClientData>
 		racesQueue: RacesQueuer.queue,
 	};
 }
+
+async function load()
+{
+	latestTracks.push(...await Database.getLatestTracks(LatestTracksLimit));
+	tiles.push(...await Database.getTiles());
+}
+
 
 function notifyTrackPublished(track: Track)
 {

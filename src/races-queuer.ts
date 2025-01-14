@@ -125,6 +125,36 @@ function characterFinished(playerId: Player['id']): void
 	}
 }
 
+function quitRace(playerId: Player['id']): void
+{
+	if (!racingPlayers.has(playerId))
+		return;
+	
+	const raceId = racingPlayers.get(playerId)!;
+	const race = races[raceId];
+	
+	racingPlayers.delete(playerId);
+
+	if (race.players.length === 1)
+	{
+		delete races[raceId];
+	}
+	else
+	{
+		race.players = race.players.filter(player => player.id !== playerId);
+
+		for (const player of race.players)
+			SocketManager.get(player.id)?.send('Race_Character_Quit', playerId);
+	}
+}
+
+
+function notifyPlayerDisconnected(playerId: Player['id']): void
+{
+	dequeue(playerId);
+	quitRace(playerId);
+}
+
 
 async function getOrCreateEntry(trackId: string): Promise<RacesQueueEntry>
 {
@@ -192,4 +222,6 @@ export const RacesQueuer = {
 	setReady,
 	characterUpdate,
 	characterFinished,
+	quitRace,
+	notifyPlayerDisconnected,
 };
